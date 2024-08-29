@@ -30,6 +30,13 @@ interface GetUserByDiscordIdResponse {
   userId: string;
 }
 
+interface UserData {
+  genres: TopGenre[];
+  artists: TopArtist[];
+  albums: TopAlbum[];
+  tracks: TopTrack[];
+}
+
 enum StatType {
   GENRES = 'genres',
   ARTISTS = 'artists',
@@ -37,11 +44,11 @@ enum StatType {
   TRACKS = 'tracks'
 }
 
-const getAllData = async (statsfmUserId: string, range: Range) => {
-  const genres = await getPaginatedData<TopGenre[]>(StatType.GENRES, statsfmUserId, range);
-  const artists = await getPaginatedData<TopArtist[]>(StatType.ARTISTS, statsfmUserId, range);
-  const albums = await getPaginatedData<TopAlbum[]>(StatType.ALBUMS, statsfmUserId, range);
-  const tracks = await getPaginatedData<TopTrack[]>(StatType.TRACKS, statsfmUserId, range);
+const getAllData = async (statsfmUserId: string, range: Range): Promise<UserData> => {
+  const genres = await getPaginatedData<TopGenre>(StatType.GENRES, statsfmUserId, range);
+  const artists = await getPaginatedData<TopArtist>(StatType.ARTISTS, statsfmUserId, range);
+  const albums = await getPaginatedData<TopAlbum>(StatType.ALBUMS, statsfmUserId, range);
+  const tracks = await getPaginatedData<TopTrack>(StatType.TRACKS, statsfmUserId, range);
 
   return {
     genres,
@@ -52,8 +59,9 @@ const getAllData = async (statsfmUserId: string, range: Range) => {
 };
 
 const getPaginatedData = async <T>(statType: StatType, statsfmUserId: string, range: Range) => {
-  const limit = 1000;
+  const limit = 500;
   const orderBy = 'TIME';
+  const total = 500;
 
   let offset = 0;
   const allData: T[] = [];
@@ -73,11 +81,119 @@ const getPaginatedData = async <T>(statType: StatType, statsfmUserId: string, ra
     allData.push(...data);
     offset += limit;
 
-    if (data.length === 0 || offset >= 10000) break;
+    if (data.length === 0 || offset >= 10000 || allData.length >= total) break;
   }
 
   return allData;
 };
+
+const compareDataPercent = (selfData: UserData, otherData: UserData) => {
+  const genres = compareItemsPercent(selfData.genres, otherData.genres, 'genre');
+  const artists = compareItemsPercent(selfData.artists, otherData.artists, 'artist');
+  const albums = compareItemsPercent(selfData.albums, otherData.albums, 'album');
+  const tracks = compareItemsPercent(selfData.tracks, otherData.tracks, 'track');
+  return {
+    genres,
+    artists,
+    albums,
+    tracks
+  };
+};
+
+const compareDataPoints = (selfData: UserData, otherData: UserData) => {
+  const genres = compareItemsPoints(selfData.genres, otherData.genres, 'genre');
+  const artists = compareItemsPoints(selfData.artists, otherData.artists, 'artist');
+  const albums = compareItemsPoints(selfData.albums, otherData.albums, 'album');
+  const tracks = compareItemsPoints(selfData.tracks, otherData.tracks, 'track');
+
+  return {
+    genres,
+    artists,
+    albums,
+    tracks
+  };
+};
+
+const compareItemsPercent = <T extends Record<string, any>>(
+  selfItems: T[],
+  otherItems: T[],
+  field: keyof T
+) => {
+  const identifierKey = field === 'genre' ? 'tag' : 'id';
+  const all = new Set();
+  const overlap = selfItems.filter((selfItem) => {
+    all.add(selfItem[field][identifierKey]);
+    return otherItems.some(
+      (otherItem) => otherItem[field][identifierKey] === selfItem[field][identifierKey]
+    );
+  });
+  return overlap.length / all.size;
+};
+
+const compareItemsPoints = <T extends Record<string, any>>(
+  selfItems: T[],
+  otherItems: T[],
+  field: keyof T
+) => {
+  const identifierKey = field === 'genre' ? 'tag' : 'id';
+
+  //Generate postion maps
+  const selfMap = new Map(selfItems.map((item, index) => [item[field][identifierKey], index]));
+  const otherMap = new Map(otherItems.map((item, index) => [item[field][identifierKey], index]));
+
+  //Calculate points
+  let points = 0;
+  for (const selfItem of selfItems) {
+    const otherIndex = otherMap.get(selfItem[field][identifierKey]);
+    if (otherIndex !== undefined) {
+      points += addPoints(selfMap.get(selfItem[field][identifierKey]) ?? 0, otherIndex);
+    }
+  }
+  return points;
+};
+
+function addPoints(ownPosition: number, otherPosition: number): number {
+  if (otherPosition <= 5) {
+    if (ownPosition <= 5) return 32;
+    if (ownPosition <= 10) return 18;
+    if (ownPosition <= 25) return 12;
+    if (ownPosition <= 40) return 6;
+    if (ownPosition <= 60) return 3;
+    if (ownPosition <= 120) return 2;
+    return 1;
+  }
+  if (otherPosition <= 10) {
+    if (ownPosition <= 10) return 18;
+    if (ownPosition <= 25) return 12;
+    if (ownPosition <= 40) return 6;
+    if (ownPosition <= 60) return 4;
+    if (ownPosition <= 120) return 2;
+    return 1;
+  }
+  if (otherPosition <= 25) {
+    if (ownPosition <= 25) return 12;
+    if (ownPosition <= 40) return 6;
+    if (ownPosition <= 60) return 4;
+    if (ownPosition <= 120) return 2;
+    return 1;
+  }
+  if (otherPosition <= 40) {
+    if (ownPosition <= 40) return 6;
+    if (ownPosition <= 60) return 4;
+    if (ownPosition <= 120) return 2;
+    return 1;
+  }
+  if (otherPosition <= 60) {
+    if (ownPosition <= 60) return 4;
+    if (ownPosition <= 120) return 2;
+    return 1;
+  }
+  if (otherPosition <= 120) {
+    if (ownPosition <= 120) return 2;
+    return 1;
+  }
+  return 1;
+}
 
 export default createCommand(AffinityCommand)
   .registerChatInput(async ({ interaction, args, statsfmUser: statsfmUserSelf, respond }) => {
@@ -108,10 +224,6 @@ export default createCommand(AffinityCommand)
     }
 
     let stats: StreamStats;
-    // let genres: TopGenre[];
-    // let artists: TopArtist[];
-    // let albums: TopAlbum[];
-    // let tracks: TopTrack[];
 
     try {
       stats = await statsfmApi.users.stats(statsfmUser.id, {
@@ -131,43 +243,48 @@ export default createCommand(AffinityCommand)
       }
 
       respond(interaction, {
-        content: `Fetching Meme Data: ${layla.userId}`,
-        ephemeral: true
+        embeds: [
+          createEmbed()
+            .setTimestamp()
+            .setDescription(
+              `<a:loading:821676038102056991> Loading ${statsfmUser.displayName}'s data...`
+            )
+            .toJSON()
+        ]
       });
-      const laylaData = await getAllData(layla.userId, Range.LIFETIME);
+      const selfDataPromise = getAllData(statsfmUser.id, Range.LIFETIME);
       respond(interaction, {
-        content: `Fetching Layla Data: ${layla.userId}`,
-        ephemeral: true
+        embeds: [
+          createEmbed()
+            .setTimestamp()
+            .setDescription(`<a:loading:821676038102056991> Loading Layla's data...`)
+            .toJSON()
+        ]
       });
-      const selfData = await getAllData(statsfmUser.id, Range.LIFETIME);
+      const laylaDataPromise = getAllData(layla.userId, Range.LIFETIME);
 
-      // artists = await statsfmApi.users.(statsfmUser.id, {
-      //   range: Range.WEEKS
-      // });
+      logger.info('Fetching data...');
+      const [selfData, laylaData] = await Promise.all([selfDataPromise, laylaDataPromise]);
 
-      logger.debug(`Top genres length: ${selfData.genres.length}`);
-      // logger.debug(`Top genre: ${JSON.stringify(genres.slice(0, 5))}`);
+      logger.info('Calculating percent...');
+      const percent = compareDataPercent(selfData, laylaData);
+      logger.info(`Percent: ${JSON.stringify(percent)}\n`);
 
-      logger.debug(`Top artists length: ${selfData.artists.length}`);
-      // logger.debug(`Top artists: ${JSON.stringify(artists.slice(0, 5))}`);
+      logger.info('Calculating points...');
+      const points = compareDataPoints(selfData, laylaData);
+      logger.info(`Points: ${JSON.stringify(points)}\n\n`);
 
-      logger.debug(`Top albums length: ${selfData.albums.length}`);
-      // logger.debug(`Top albums: ${JSON.stringify(albums.slice(0, 5))}`);
+      logger.info('Calculating percent Swap...');
+      const percentSwap = compareDataPercent(laylaData, selfData);
+      logger.info(`Percent Swap: ${JSON.stringify(percentSwap)}\n`);
 
-      logger.debug(`Top tracks length: ${selfData.tracks.length}\n`);
-      // logger.debug(`Top tracks: ${JSON.stringify(tracks.slice(0, 5))}`);
+      logger.info('Calculating points Swap...');
+      const pointsSwap = compareDataPoints(laylaData, selfData);
+      logger.info(`Points Swap: ${JSON.stringify(pointsSwap)}\n\n`);
 
-      logger.debug(`Top genres length layla: ${laylaData.genres.length}`);
-      // logger.debug(`Top genre: ${JSON.stringify(genres.slice(0 layla, 5))}`);
-
-      logger.debug(`Top artists length layla: ${laylaData.artists.length}`);
-      // logger.debug(`Top artists: ${JSON.stringify(artists.slice(0, 5))}`);
-
-      logger.debug(`Top albums length layla: ${laylaData.albums.length}`);
-      // logger.debug(`Top albums: ${JSON.stringify(albums.slice(0, 5))}`);
-
-      logger.debug(`Top tracks length layla: ${laylaData.tracks.length}`);
-      // logger.debug(`Top tracks: ${JSON.stringify(tracks.slice(0, 5))}`);
+      logger.info(
+        `${(pointsSwap.albums / points.albums) * 2} ${(pointsSwap.artists / points.artists) * 2} ${(pointsSwap.genres / points.genres) * 2} ${(pointsSwap.tracks / points.tracks) * 2}`
+      );
     } catch (e: any) {
       logger.error(e);
       stats = {
