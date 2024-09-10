@@ -1,5 +1,5 @@
-import { Api, Range, StreamStats } from '@statsfm/statsfm.js';
-import { APIEmbedField, ButtonBuilder, ButtonStyle, ComponentType } from 'discord.js';
+import { Api, Range } from '@statsfm/statsfm.js';
+// import { APIEmbedField, ButtonBuilder, ButtonStyle, ComponentType } from 'discord.js';
 import { container } from 'tsyringe';
 
 import type { Logger } from '../util/Logger';
@@ -19,19 +19,46 @@ import {
   TopGenre,
   TopTrack
 } from '@statsfm/statsfm.js/dist/interfaces/statsfm/v1';
+import { createPaginationComponentTypes, createPaginationManager } from '../util/PaginationManager';
+import { StatsfmUser } from '../util/StatsfmUser';
+import * as fs from 'fs';
+import * as path from 'path';
 
 const statsfmApi = container.resolve(Api);
 const privacyManager = container.resolve(PrivacyManager);
 const analytics = container.resolve(Analytics);
 const logger = container.resolve<Logger>(kLogger);
+const AffinityComponents = createPaginationComponentTypes('affinities');
+
+const AffinityConstants = {
+  guildMemberBatchSize: 50000,
+  statusMessages: {
+    fetchingServerMembers:
+      'Fetching server members...\n-# Due to stat.fm limitations, this will take a while.',
+    fetchingServerMembersCount: (count: number, total: number) =>
+      `Getting server members... (${count}/${total})\n-# Due to stat.fm limitations, this will take a while.`,
+    fetchingTopListeners: 'Fetching All Stats.fm Users in the Server... This can take a while.'
+  }
+};
 
 type Category = 'tracks' | 'artists' | 'albums' | 'genres';
-interface GetUserByDiscordIdResponse {
-  id: number;
-  verified: boolean;
-  userId: string;
+// interface GetUserByDiscordIdResponse {
+//   id: number;
+//   verified: boolean;
+//   userId: string;
+// }
+
+interface DiscordUser {
+  displayName: string;
+  user: StatsfmUser;
 }
 
+interface Affinities {
+  overallRank: number;
+  user: DiscordUser;
+  rbo: Record<StatType, string>;
+  pac: Record<StatType, string>;
+}
 interface UserData {
   genres: string[];
   artists: string[];
@@ -47,11 +74,16 @@ enum StatType {
 }
 
 const getAllData = async (statsfmUserId: string, range: Range): Promise<UserData> => {
-  const genres = await getPaginatedData<TopGenre>(StatType.GENRES, statsfmUserId, range);
-  const artists = await getPaginatedData<TopArtist>(StatType.ARTISTS, statsfmUserId, range);
-  const albums = await getPaginatedData<TopAlbum>(StatType.ALBUMS, statsfmUserId, range);
-  const tracks = await getPaginatedData<TopTrack>(StatType.TRACKS, statsfmUserId, range);
-
+  const genresPromise = getPaginatedData<TopGenre>(StatType.GENRES, statsfmUserId, range);
+  const artistsPromise = getPaginatedData<TopArtist>(StatType.ARTISTS, statsfmUserId, range);
+  const albumsPromise = getPaginatedData<TopAlbum>(StatType.ALBUMS, statsfmUserId, range);
+  const tracksPromise = getPaginatedData<TopTrack>(StatType.TRACKS, statsfmUserId, range);
+  const [genres, artists, albums, tracks] = await Promise.all([
+    genresPromise,
+    artistsPromise,
+    albumsPromise,
+    tracksPromise
+  ]);
   return {
     genres: mapDataToIds(genres),
     artists: mapDataToIds(artists),
@@ -63,7 +95,7 @@ const getAllData = async (statsfmUserId: string, range: Range): Promise<UserData
 const getPaginatedData = async <T>(statType: StatType, statsfmUserId: string, range: Range) => {
   const limit = 500;
   const orderBy = 'TIME';
-  const total = 500000;
+  const total = 5000;
 
   let offset = 0;
   const allData: T[] = [];
@@ -83,7 +115,7 @@ const getPaginatedData = async <T>(statType: StatType, statsfmUserId: string, ra
     allData.push(...data);
     offset += limit;
 
-    if (data.length === 0 || offset >= 10000 || allData.length >= total) break;
+    if (data.length === 0 || offset >= 5000 || allData.length >= total) break;
   }
 
   return allData;
@@ -110,36 +142,13 @@ const mapDataToIds = (data: TopGenre[] | TopArtist[] | TopAlbum[] | TopTrack[]):
   });
 };
 
-// Function to calculate normalized weight based on rank
-// function getWeight(list: string[], item: string, itemRank?: number): number {
-//   const rank = itemRank ?? list.indexOf(item);
-//   if (rank === -1) return 0;
-//   const percntile = rank / list.length;
-//   switch (true) {
-//     case percntile <= 0.01:
-//       return 1;
-//     case percntile <= 0.05:
-//       return 0.9;
-//     case percntile <= 0.1:
-//       return 0.8;
-//     case percntile <= 0.25:
-//       return 0.7;
-//     case percntile <= 0.5:
-//       return 0.5;
-//     case percntile <= 0.75:
-//       return 0.3;
-//     case percntile <= 0.9:
-//       return 0.2;
-//   }
-//   return 0.1;
-
-//   // return rank >= 0 ? 1 - rank / list.length : 0;
-// }
-
-// const getPacWeight = (rank: number): number => {};
-
-const pacMethod = (user1: UserData, user2: UserData): Array<number> => {
-  const similiarites: Array<number> = [];
+const pacMethod = (user1: UserData, user2: UserData): Record<StatType, string> => {
+  const similarities: Record<StatType, string> = {
+    genres: '0',
+    artists: '0',
+    albums: '0',
+    tracks: '0'
+  };
   for (const category of Object.keys(categoryWeights) as Category[]) {
     const user1List = user1[category];
     const user2List = user2[category];
@@ -149,7 +158,6 @@ const pacMethod = (user1: UserData, user2: UserData): Array<number> => {
 
     user1List.forEach((item, rank) => {
       const otherRank = user2List.indexOf(item);
-      // if (otherRank === -1) return;
       const differenceFactor =
         otherRank === -1
           ? 1
@@ -165,154 +173,37 @@ const pacMethod = (user1: UserData, user2: UserData): Array<number> => {
     });
 
     logger.info(`${category}: ${1 - total}`);
-    similiarites.push(1 - total);
+    let result = (1 - total) * 100;
+    if (result < 0 && result > -0.5) {
+      result = 0;
+    }
+    similarities[category] = result.toFixed(0);
   }
-  return similiarites;
+  return similarities;
 };
 
-function calculateRBO(user1: UserData, user2: UserData, p: number = 0.9): void {
-  for (const category of Object.keys(categoryWeights) as Category[]) {
-    const user1Ranking = user1[category];
-    const user2Ranking = user2[category];
-
-    const len1 = user1Ranking.length;
-    const len2 = user2Ranking.length;
-    const maxDepth = Math.max(len1, len2); // The depth we'll go down the list
-
-    let rboScore = 0;
-    let overlap = 0; // Keeps track of the number of common items at each depth
-    const seenItems = new Set<string>();
-
-    // Iterate through the ranks to compute the overlap at each depth
-    for (let d = 1; d <= maxDepth; d++) {
-      const item1 = d <= len1 ? user1Ranking[d - 1] : null;
-      const item2 = d <= len2 ? user2Ranking[d - 1] : null;
-
-      // Update the set of seen items
-      if (item1 && seenItems.has(item1)) {
-        overlap++;
-      } else if (item1) {
-        seenItems.add(item1);
-      }
-
-      if (item2 && seenItems.has(item2)) {
-        overlap++;
-      } else if (item2) {
-        seenItems.add(item2);
-      }
-
-      // Calculate the weighted overlap for this depth
-      const weight = Math.pow(p, d - 1);
-      rboScore += (overlap / (2 * d)) * weight;
-    }
-
-    // Multiply the score by (1 - p) to normalize
-    logger.info(`${category}: ${(1 - p) * rboScore}`);
-  }
-}
-
-const kendallsW = (user1: UserData, user2: UserData): void => {
+const calculateRBO = (user1: UserData, user2: UserData): Record<StatType, string> => {
+  const similarities: Record<StatType, string> = {
+    genres: '0',
+    artists: '0',
+    albums: '0',
+    tracks: '0'
+  };
   for (const category of Object.keys(categoryWeights) as Category[]) {
     const user1List = user1[category];
     const user2List = user2[category];
 
-    const user1Ranks = getRanks(user1List, user1List);
-    const user2Ranks = getRanks(user2List, user1List);
-
-    const n = user1Ranks.length;
-
-    if (n !== user2Ranks.length) {
-      throw new Error('Both rankings must have the same number of items');
-    }
-
-    // Calculate the difference in ranks (D) for each item
-    let sumOfSquaredDifferences = 0;
-    for (let i = 0; i < n; i++) {
-      const difference = user1Ranks[i] - user2Ranks[i];
-      sumOfSquaredDifferences += Math.pow(difference, 2);
-    }
-
-    // Compute Kendall's W
-    const numerator = 12 * sumOfSquaredDifferences;
-    const denominator = n * (Math.pow(n, 2) - 1);
-
-    // The coefficient of concordance (W) is 1 - (numerator / denominator)
-    const similiarity = 1 - numerator / denominator;
-    logger.info(`${category}: ${similiarity}`);
+    const rbo = new RBO(0.99).calculate(user1List, user2List);
+    logger.info(`${category}: ${rbo}`);
+    similarities[category] = (rbo * 100).toFixed(0);
   }
+  return similarities;
 };
-
-/**
- * Helper function to convert a sorted list into rank array
- * @param sortedItems Sorted list of items
- * @param referenceList Reference list from which rankings will be derived
- * @returns Array of ranks
- */
-function getRanks(sortedItems: string[], referenceList: string[]): number[] {
-  return referenceList.map((item) => sortedItems.indexOf(item) + 1);
-}
-
-// function calculateSimilarity(user1: UserData, user2: UserData): number {
-//   let totalSimilarity = 0;
-
-//   (Object.keys(categoryWeights) as Category[]).forEach((category) => {
-//     // if (category !== 'genres') return;
-//     const user1List = user1[category];
-//     const user2List = user2[category];
-
-//     let weightedSimilarity = 0;
-//     let totalCommon = 0;
-
-//     user1List.forEach((item, rank) => {
-//       const weight1 = getWeight(user1List, item, rank);
-//       const weight2 = getWeight(user2List, item);
-//       // logger.info(`${item}: ${weight1} ${weight2}`);
-//       if (user2List.includes(item)) {
-//         weightedSimilarity += 1 - (weight2 - weight1);
-//         totalCommon += weight1;
-//       }
-//     });
-//     weightedSimilarity = weightedSimilarity / user1List.length;
-
-//     logger.info(`Union: ${totalCommon}`);
-//     // const categorySimilarity = unionSimilarity === 0 ? 0 : intersectionSimilarity / unionSimilarity;
-//     const categorySimilarity = weightedSimilarity;
-//     totalSimilarity += categorySimilarity * categoryWeights[category];
-//     logger.info(`${category}: ${categorySimilarity}`);
-//   });
-
-//   return totalSimilarity / 4;
-// }
-
-// const percentInCommon = (user1: UserData, user2: UserData): number => {
-//   let total = 0;
-//   let common = 0;
-
-//   (Object.keys(categoryWeights) as Category[]).forEach((category) => {
-//     let catagoryTotal = 0;
-//     let categoryCommon = 0;
-
-//     const user1List = user1[category];
-//     const user2List = user2[category];
-
-//     user1List.forEach((item) => {
-//       if (user2List.includes(item)) {
-//         categoryCommon++;
-//       }
-//       catagoryTotal++;
-//     });
-//     logger.info(`${category}: ${categoryCommon / catagoryTotal}`);
-//     common += categoryCommon;
-//     total += catagoryTotal;
-//   });
-
-//   return common / total;
-// };
 
 export default createCommand(AffinityCommand)
   .registerChatInput(async ({ interaction, args, statsfmUser: statsfmUserSelf, respond }) => {
     await interaction.deferReply();
-    const targetUser = args.user?.user ?? interaction.user;
+    const targetUser = interaction.user;
     const statsfmUser =
       targetUser === interaction.user
         ? statsfmUserSelf
@@ -321,6 +212,12 @@ export default createCommand(AffinityCommand)
       await analytics.track('PROFILE_target_user_not_linked');
       return respond(interaction, {
         embeds: [notLinkedEmbed(targetUser)]
+      });
+    }
+
+    if (!interaction.guild || !interaction.guildId) {
+      return respond(interaction, {
+        content: 'This command can only be used in a server.'
       });
     }
 
@@ -337,186 +234,194 @@ export default createCommand(AffinityCommand)
       });
     }
 
-    let stats: StreamStats;
+    let range = Range.WEEKS;
+    let rangeDisplay = 'Past 4 Weeks';
+
+    if (args.range === '6-months') {
+      range = Range.MONTHS;
+      rangeDisplay = 'Past 6 Months';
+    }
+    if (args.range === 'lifetime') {
+      range = Range.LIFETIME;
+      rangeDisplay = 'Lifetime';
+    }
 
     try {
-      stats = await statsfmApi.users.stats(statsfmUser.id, {
-        range: Range.LIFETIME
-      });
-      const layla = await statsfmApi.http
-        .get<GetUserByDiscordIdResponse>(`/private/get-user-by-discord-id`, {
-          query: {
-            id: '222453926685966336'
-          }
-        })
-        .catch(() => null);
+      // const layla = await statsfmApi.http
+      //   .get<GetUserByDiscordIdResponse>(`/private/get-user-by-discord-id`, {
+      //     query: {
+      //       id: '222453926685966336'
+      //     }
+      //   })
+      //   .catch(() => null);
+      // const snail = await statsfmApi.http
+      //   .get<GetUserByDiscordIdResponse>(`/private/get-user-by-discord-id`, {
+      //     query: {
+      //       id: '861648226905489438'
+      //     }
+      //   })
+      //   .catch(() => null);
 
-      if (!layla) {
-        // throw new Error('Layla not found');
-        return;
+      // if (!layla || !snail) {
+      //   // throw new Error('Layla not found');
+      //   return;
+      // }
+
+      // respond(interaction, {
+      //   embeds: [
+      //     createEmbed()
+      //       .setTimestamp()
+      //       .setDescription(
+      //         `<a:loading:821676038102056991> Loading ${statsfmUser.displayName}'s data...`
+      //       )
+      //       .toJSON()
+      //   ]
+      // });
+      // const selfDataPromise = getAllData(statsfmUser.id, Range.LIFETIME);
+      // respond(interaction, {
+      //   embeds: [
+      //     createEmbed()
+      //       .setTimestamp()
+      //       .setDescription(`<a:loading:821676038102056991> Loading Layla's data...`)
+      //       .toJSON()
+      //   ]
+      // });
+      // const laylaDataPromise = getAllData(layla.userId, Range.LIFETIME);
+
+      // logger.info('Fetching data...');
+      // const [selfData, laylaData] = await Promise.all([selfDataPromise, laylaDataPromise]);
+
+      // logger.info('Calculating affinity...');
+      // const affinity = pacMethod(selfData, laylaData);
+      // logger.info(`Affinity: ${affinity}\n`);
+
+      // logger.info('Calculating RBO...');
+      // const rboAffnities = {
+      //   tracks: (new RBO(0.99).calculate(selfData.tracks, laylaData.tracks) * 100).toFixed(0),
+      //   artists: (new RBO(0.99).calculate(selfData.artists, laylaData.artists) * 100).toFixed(0),
+      //   albums: (new RBO(0.99).calculate(selfData.albums, laylaData.albums) * 100).toFixed(0),
+      //   genres: (new RBO(0.99).calculate(selfData.genres, laylaData.genres) * 100).toFixed(0)
+      // };
+      // logger.info(`RBO: ${JSON.stringify(rboAffnities)}\n`);
+      // } catch (e: any) {
+      //   logger.error(e);
+      // }
+
+      await respond(interaction, {
+        content: AffinityConstants.statusMessages.fetchingServerMembers
+      });
+      const members: DiscordUser[] = [];
+      const guildMembers = await interaction.guild.members.fetch();
+      logger.info(`Fetched ${guildMembers.size} members`);
+      for (let i = 0; i < guildMembers.size; i++) {
+        const data = Array.from(guildMembers)[i][1];
+        if (data.user.bot) continue;
+        const user = await getStatsfmUserFromDiscordUser(data.user);
+        if (user && user.id !== statsfmUser.id) {
+          members.push({
+            displayName: data.displayName,
+            user
+          });
+        }
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        await respond(interaction, {
+          content: AffinityConstants.statusMessages.fetchingServerMembersCount(i, guildMembers.size)
+        });
+      }
+      logger.info(
+        `Fetched ${members.length} members\n${members.map((m) => m.displayName).join('\n')}`
+      );
+
+      const affinities: Affinities[] = [];
+      const selfData = await getAllData(statsfmUser.id, range);
+
+      // members.push(
+      //   {
+      //     displayName: 'Layla',
+      //     user: getStatsfmUserFromDiscordUser()
+      //   },
+      //   {
+      //     displayName: 'Snail',
+      //     user: snail
+      //   }
+      // );
+
+      if (members.length === 0) {
+        return respond(interaction, {
+          content: 'No other Stats.fm users in this server.'
+        });
       }
 
-      respond(interaction, {
-        embeds: [
-          createEmbed()
-            .setTimestamp()
-            .setDescription(
-              `<a:loading:821676038102056991> Loading ${statsfmUser.displayName}'s data...`
-            )
-            .toJSON()
-        ]
+      for (const member of members) {
+        await respond(interaction, {
+          content: `Fetching data for ${member.displayName}...`
+        });
+        const memberData = await getAllData(member.user.id, range).catch(() => null);
+        if (!memberData) {
+          logger.warn(`Failed to fetch data for ${member.displayName}`);
+          continue;
+        }
+        // if (
+        //   member.displayName === 'Fevenir' ||
+        //   member.displayName === 'shig' ||
+        //   member.displayName === 'lizzie'
+        // ) {
+        logger.info(`Writing data for ${member.displayName}`);
+        const filePath = path.join(__dirname, `${member.displayName}.json`);
+        fs.writeFileSync(filePath, JSON.stringify(memberData, null, 2));
+        // }
+        const pac = pacMethod(selfData, memberData);
+        const rbo = calculateRBO(selfData, memberData);
+        affinities.push({
+          overallRank: 0,
+          user: member,
+          rbo,
+          pac
+        });
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+
+      // await analytics.track('PROFILE');
+
+      const pagination = createPaginationManager(affinities, (currPage, totalPages, currData) => {
+        // eslint-disable-next-line prettier/prettier
+        return createEmbed()
+          .setAuthor({
+            name: `${targetUser.displayName}'s ${rangeDisplay} Affinities`,
+            url: statsfmUser.profileUrl
+          })
+          .setDescription(
+            currData
+              .map((affinityData) => {
+                let sorryMarie = '';
+                if (affinityData.user.displayName === 'dfop[gbuwivyfgeaifgw4biu23g') {
+                  sorryMarie =
+                    '\n-# Sorry Marie, I tried but discord is dumb so i can make your full name link properly';
+                }
+                const userUrl = affinityData.user.user.profileUrl;
+                return `
+              ${affinityData.overallRank}. [${affinityData.user.displayName}](${userUrl}) • 
+                \n**Method 1:** **${affinityData.pac.genres}%** genres, **${affinityData.pac.artists}%** artists, **${affinityData.pac.albums}%** albums, **${affinityData.pac.tracks}%** tracks
+                **Method 2:** **${affinityData.rbo.genres}%** genres, **${affinityData.rbo.artists}%** artists, **${affinityData.rbo.albums}%** albums, **${affinityData.rbo.tracks}%** tracks${sorryMarie}`;
+              })
+              .join('\n')
+          )
+          .setFooter({ text: `Page ${currPage}/${totalPages}` });
       });
-      const selfDataPromise = getAllData(statsfmUser.id, Range.LIFETIME);
-      respond(interaction, {
-        embeds: [
-          createEmbed()
-            .setTimestamp()
-            .setDescription(`<a:loading:821676038102056991> Loading Layla's data...`)
-            .toJSON()
-        ]
-      });
-      const laylaDataPromise = getAllData(layla.userId, Range.LIFETIME);
 
-      logger.info('Fetching data...');
-      const [selfData, laylaData] = await Promise.all([selfDataPromise, laylaDataPromise]);
+      const message = await respond(
+        interaction,
+        pagination.createMessage<'reply'>(await pagination.current(), AffinityComponents)
+      );
 
-      // selfData = {
-      //   genres: ['a', 'b', 'c', 'd'],
-      //   artists: ['a', 'b', 'c', 'd'],
-      //   albums: ['a', 'b', 'c', 'd'],
-      //   tracks: ['a', 'b', 'c', 'd']
-      // };
+      pagination.manageCollector(message, AffinityComponents, interaction.user);
 
-      // laylaData = {
-      //   genres: ['a', 'b', 'c', 'd'],
-      //   artists: ['d', 'c', 'b', 'a'],
-      //   albums: ['a', 'b', 'c', 'd', 'e'],
-      //   tracks: ['e', 'f', 'g', 'h', 'i']
-      // };
-
-      logger.info('Calculating affinity...');
-      const affinity = pacMethod(selfData, laylaData);
-      logger.info(`Affinity: ${affinity}\n`);
-
-      logger.info('Calculating kendallsW...');
-      kendallsW(selfData, laylaData);
-      logger.info('');
-
-      logger.info('Calculating RBO...');
-      calculateRBO(selfData, laylaData);
-      logger.info('');
-
-      logger.info('Calculating Other RBO...');
-      let rbo = new RBO(0.99);
-      logger.info(`tracks: ${rbo.calculate(selfData.tracks, laylaData.tracks)}`);
-      rbo = new RBO(0.99);
-      logger.info(`artists: ${rbo.calculate(selfData.artists, laylaData.artists)}`);
-      rbo = new RBO(0.99);
-      logger.info(`albums: ${rbo.calculate(selfData.albums, laylaData.albums)}`);
-      rbo = new RBO(0.99);
-      logger.info(`genres: ${rbo.calculate(selfData.genres, laylaData.genres)}`);
-      // logger.info('Calculating percent in common...');
-      // const percentInCommonValue = percentInCommon(selfData, laylaData);
-      // logger.info(`Percent in common: ${percentInCommonValue}\n`);
-
-      // logger.info('Calculating percent...');
-      // const percent = compareDataPercent(selfData, laylaData);
-      // logger.info(`Percent: ${JSON.stringify(percent)}\n`);
-
-      // logger.info('Calculating points...');
-      // const points = compareDataPoints(selfData, laylaData);
-      // logger.info(`Points: ${JSON.stringify(points)}\n\n`);
-
-      // logger.info('Calculating percent Swap...');
-      // const percentSwap = compareDataPercent(laylaData, selfData);
-      // logger.info(`Percent Swap: ${JSON.stringify(percentSwap)}\n`);
-
-      // logger.info('Calculating points Swap...');
-      // const pointsSwap = compareDataPoints(laylaData, selfData);
-      // logger.info(`Points Swap: ${JSON.stringify(pointsSwap)}\n\n`);
-
-      // logger.info(
-      //   `${(pointsSwap.albums / points.albums) * 2} ${(pointsSwap.artists / points.artists) * 2} ${(pointsSwap.genres / points.genres) * 2} ${(pointsSwap.tracks / points.tracks) * 2}`
-      // );
+      return message;
     } catch (e: any) {
       logger.error(e);
-      stats = {
-        count: -1,
-        durationMs: -1
-      };
-    }
-
-    const fields: APIEmbedField[] = [
-      {
-        name: 'Pronouns',
-        value: statsfmUser.profile?.pronouns ?? 'Not assigned',
-        inline: stats.count != -1
-      }
-    ];
-
-    if (stats.count != -1) {
-      fields.push({
-        name: 'Streams',
-        value: stats.count.toLocaleString(),
-        inline: true
-      });
-      fields.push({
-        name: 'Minutes streamed',
-        value: `${Math.round((stats.durationMs ?? 0) / 1000 / 60).toLocaleString()} minutes`,
-        inline: true
+      return respond(interaction, {
+        content: 'An error occurred while fetching data.'
       });
     }
-
-    const bio = statsfmUser.profile && statsfmUser.profile.bio ? statsfmUser.profile.bio : 'No bio';
-
-    fields.push({
-      name: 'Bio',
-      value: bio
-    });
-
-    await analytics.track('PROFILE');
-
-    return respond(interaction, {
-      embeds: [
-        createEmbed()
-          .setTimestamp()
-          .setThumbnail(
-            statsfmUser.image ??
-              'https://cdn.stats.fm/file/statsfm/images/placeholders/users/private.web'
-          )
-          .setAuthor({
-            name: statsfmUser.displayName
-          })
-          .addFields(fields)
-          .toJSON()
-      ],
-      components: [
-        {
-          type: ComponentType.ActionRow,
-          components: [
-            {
-              type: ComponentType.Button,
-              label: 'View on stats.fm',
-              style: ButtonStyle.Link,
-              url: statsfmUser.profileUrl,
-              emoji: {
-                name: '🔗'
-              }
-            },
-            ...(statsfmUser.privacySettings.connections
-              ? [
-                  new ButtonBuilder()
-                    .setStyle(ButtonStyle.Link)
-                    .setLabel('View on Spotify')
-                    .setURL(statsfmUser.profileUrlSpotify)
-                    .setEmoji({
-                      id: '998272544870252624'
-                    })
-                ]
-              : [])
-          ]
-        }
-      ]
-    });
   })
   .build();
