@@ -25,7 +25,7 @@ export class Logger {
     const time: string = dayjs().format(this.timeFormat);
     const levelColorFn = this.colors.get(level) || chalk.gray.bold;
     const contextMessage = context ?? this.context ?? 'Unknown';
-
+    if (level == 'debug' || level == 'verbose') return;
     const log = (msg: string): void => {
       console.log(
         [

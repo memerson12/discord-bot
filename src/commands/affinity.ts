@@ -73,6 +73,8 @@ enum StatType {
   TRACKS = 'tracks'
 }
 
+type AllowedTypes = TopGenre | TopArtist | TopAlbum | TopTrack;
+
 const getAllData = async (statsfmUserId: string, range: Range): Promise<UserData> => {
   const genresPromise = getPaginatedData<TopGenre>(StatType.GENRES, statsfmUserId, range);
   const artistsPromise = getPaginatedData<TopArtist>(StatType.ARTISTS, statsfmUserId, range);
@@ -92,7 +94,11 @@ const getAllData = async (statsfmUserId: string, range: Range): Promise<UserData
   };
 };
 
-const getPaginatedData = async <T>(statType: StatType, statsfmUserId: string, range: Range) => {
+const getPaginatedData = async <T extends AllowedTypes>(
+  statType: StatType,
+  statsfmUserId: string,
+  range: Range
+) => {
   const limit = 500;
   const orderBy = 'TIME';
   const total = 5000;
@@ -115,7 +121,13 @@ const getPaginatedData = async <T>(statType: StatType, statsfmUserId: string, ra
     allData.push(...data);
     offset += limit;
 
-    if (data.length === 0 || offset >= 5000 || allData.length >= total) break;
+    if (
+      data.length === 0 ||
+      offset >= 10000 ||
+      allData.length >= total ||
+      data[0].position == allData[0].position
+    )
+      break;
   }
 
   return allData;
@@ -172,7 +184,7 @@ const pacMethod = (user1: UserData, user2: UserData): Record<StatType, string> =
       total += (weight / totalWeight) * differenceFactor;
     });
 
-    logger.info(`${category}: ${1 - total}`);
+    // logger.info(`${category}: ${1 - total}`);
     let result = (1 - total) * 100;
     if (result < 0 && result > -0.5) {
       result = 0;
@@ -194,7 +206,7 @@ const calculateRBO = (user1: UserData, user2: UserData): Record<StatType, string
     const user2List = user2[category];
 
     const rbo = new RBO(0.99).calculate(user1List, user2List);
-    logger.info(`${category}: ${rbo}`);
+    // logger.info(`${category}: ${rbo}`);
     similarities[category] = (rbo * 100).toFixed(0);
   }
   return similarities;
@@ -247,66 +259,6 @@ export default createCommand(AffinityCommand)
     }
 
     try {
-      // const layla = await statsfmApi.http
-      //   .get<GetUserByDiscordIdResponse>(`/private/get-user-by-discord-id`, {
-      //     query: {
-      //       id: '222453926685966336'
-      //     }
-      //   })
-      //   .catch(() => null);
-      // const snail = await statsfmApi.http
-      //   .get<GetUserByDiscordIdResponse>(`/private/get-user-by-discord-id`, {
-      //     query: {
-      //       id: '861648226905489438'
-      //     }
-      //   })
-      //   .catch(() => null);
-
-      // if (!layla || !snail) {
-      //   // throw new Error('Layla not found');
-      //   return;
-      // }
-
-      // respond(interaction, {
-      //   embeds: [
-      //     createEmbed()
-      //       .setTimestamp()
-      //       .setDescription(
-      //         `<a:loading:821676038102056991> Loading ${statsfmUser.displayName}'s data...`
-      //       )
-      //       .toJSON()
-      //   ]
-      // });
-      // const selfDataPromise = getAllData(statsfmUser.id, Range.LIFETIME);
-      // respond(interaction, {
-      //   embeds: [
-      //     createEmbed()
-      //       .setTimestamp()
-      //       .setDescription(`<a:loading:821676038102056991> Loading Layla's data...`)
-      //       .toJSON()
-      //   ]
-      // });
-      // const laylaDataPromise = getAllData(layla.userId, Range.LIFETIME);
-
-      // logger.info('Fetching data...');
-      // const [selfData, laylaData] = await Promise.all([selfDataPromise, laylaDataPromise]);
-
-      // logger.info('Calculating affinity...');
-      // const affinity = pacMethod(selfData, laylaData);
-      // logger.info(`Affinity: ${affinity}\n`);
-
-      // logger.info('Calculating RBO...');
-      // const rboAffnities = {
-      //   tracks: (new RBO(0.99).calculate(selfData.tracks, laylaData.tracks) * 100).toFixed(0),
-      //   artists: (new RBO(0.99).calculate(selfData.artists, laylaData.artists) * 100).toFixed(0),
-      //   albums: (new RBO(0.99).calculate(selfData.albums, laylaData.albums) * 100).toFixed(0),
-      //   genres: (new RBO(0.99).calculate(selfData.genres, laylaData.genres) * 100).toFixed(0)
-      // };
-      // logger.info(`RBO: ${JSON.stringify(rboAffnities)}\n`);
-      // } catch (e: any) {
-      //   logger.error(e);
-      // }
-
       await respond(interaction, {
         content: AffinityConstants.statusMessages.fetchingServerMembers
       });
@@ -323,7 +275,7 @@ export default createCommand(AffinityCommand)
             user
           });
         }
-        await new Promise((resolve) => setTimeout(resolve, 200));
+        // await new Promise((resolve) => setTimeout(resolve, 200));
         await respond(interaction, {
           content: AffinityConstants.statusMessages.fetchingServerMembersCount(i, guildMembers.size)
         });
@@ -334,17 +286,6 @@ export default createCommand(AffinityCommand)
 
       const affinities: Affinities[] = [];
       const selfData = await getAllData(statsfmUser.id, range);
-
-      // members.push(
-      //   {
-      //     displayName: 'Layla',
-      //     user: getStatsfmUserFromDiscordUser()
-      //   },
-      //   {
-      //     displayName: 'Snail',
-      //     user: snail
-      //   }
-      // );
 
       if (members.length === 0) {
         return respond(interaction, {
@@ -358,18 +299,17 @@ export default createCommand(AffinityCommand)
         });
         const memberData = await getAllData(member.user.id, range).catch(() => null);
         if (!memberData) {
-          logger.warn(`Failed to fetch data for ${member.displayName}`);
+          logger.warn(`Failed to fetch data for ${member.displayName} (${member.user.id})`);
           continue;
         }
-        // if (
-        //   member.displayName === 'Fevenir' ||
-        //   member.displayName === 'shig' ||
-        //   member.displayName === 'lizzie'
-        // ) {
-        logger.info(`Writing data for ${member.displayName}`);
+        logger.info(`Fetched data for ${member.displayName} (${member.user.id})`);
+        logger.info(`albums length: ${memberData.albums.length}`);
+        logger.info(`artists length: ${memberData.artists.length}`);
+        logger.info(`genres length: ${memberData.genres.length}`);
+        logger.info(`tracks length: ${memberData.tracks.length}`);
+
         const filePath = path.join(__dirname, `${member.displayName}.json`);
         fs.writeFileSync(filePath, JSON.stringify(memberData, null, 2));
-        // }
         const pac = pacMethod(selfData, memberData);
         const rbo = calculateRBO(selfData, memberData);
         affinities.push({
@@ -378,7 +318,8 @@ export default createCommand(AffinityCommand)
           rbo,
           pac
         });
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+        logger.info(``);
+        await new Promise((resolve) => setTimeout(resolve, 500));
       }
 
       // await analytics.track('PROFILE');
