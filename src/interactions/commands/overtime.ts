@@ -3,18 +3,18 @@ import {
   ApplicationIntegrationType,
   CommandPayload,
   InteractionContextType,
-  StringChoiceOption,
+  StringAutocompleteOption,
   UserOption
 } from '../../util/SlashCommandUtils';
-import { rangeChoices } from '../utils';
+import { TIME_RANGES } from '../utils';
 
 // TODO: Extract this to a shared file
 function createRangeOptionForTop<T extends string>(type: T) {
   return {
     type: ApplicationCommandOptionType.String,
     description: `The range of which you want to see ${type} over time of`,
-    choices: rangeChoices(false)
-  } as const satisfies StringChoiceOption<false>;
+    choices: TIME_RANGES
+  } as const;
 }
 
 function createUserOptionForTop<T extends string>(type: T) {
@@ -32,9 +32,8 @@ export const OverTimeCommand = {
       type: ApplicationCommandOptionType.String,
       autocomplete: true,
       required: true,
-      description:
-        'The artist you want to get info about, you can use to use names and stats.fm links'
-    },
+      description: 'The artist you want to see your stats for over time vor'
+    } as const satisfies StringAutocompleteOption<false>,
     range: createRangeOptionForTop('artists'),
     user: createUserOptionForTop('artists')
   },

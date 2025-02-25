@@ -6,10 +6,12 @@
   "private": true,
   "scripts": {
     "build": "tsc",
+    "deploy": "yarn build && node dist/deploy.js",
     "lint": "eslint . --ext .ts",
     "lint:tsc": "tsc --noEmit -p .",
     "lint:fix": "eslint . --ext .ts --fix",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "dev": "nodemon --watch src --ext ts,json --exec 'tsc && node dist/index.js'"
   },
   "dependencies": {
     "@discordjs/rest": "^2.3.0",
@@ -24,6 +26,7 @@
     "murmurhash-js": "^1.0.0",
     "node-fetch": "^2.7.0",
     "node-machine-id": "^1.1.12",
+    "nodemon": "^3.1.9",
     "ow": "^0.28.2",
     "readdirp": "^3.6.0",
     "reflect-metadata": "^0.2.2",
