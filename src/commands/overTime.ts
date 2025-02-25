@@ -267,6 +267,8 @@ export default createCommand(OverTimeCommand)
         .join('\n');
     };
 
+    const artistName = await statsfmApi.artists.get(artistId);
+
     const data = await statsfmApi.users.artistDateStats(
       statsfmUser.id,
       artistId,
@@ -281,10 +283,10 @@ export default createCommand(OverTimeCommand)
     console.log(data);
     await respond(interaction, {
       content: `**User:** ${Util.getDiscordUserTag(targetUser)} (${statsfmUser?.id})
-    **Artist:** ${artist}
-    **Range:** ${range ?? 'Unknown'}
-    **data**:
-    ${arrangeData(data)}`,
+**Artist:** ${artistName.name}
+**Range:** ${range ?? 'Unknown'}
+**data**:
+${arrangeData(data)}`,
       // components: [
       //   new ActionRowBuilder<ButtonBuilder>().addComponents(
       //     new ButtonBuilder()
