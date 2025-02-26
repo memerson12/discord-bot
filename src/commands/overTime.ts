@@ -1,20 +1,22 @@
 import { Api, DateStats } from '@statsfm/statsfm.js';
-import {
-  // ActionRowBuilder,
-  // ButtonBuilder,
-  // ButtonStyle,
-  MessageFlags
-  // Collection,
-  // ChatInputCommandInteraction
-  // CollectedInteraction,
-  // User,
-  // escapeMarkdown
-  // ComponentType
-} from 'discord.js';
+// import {
+//   APIEmbedField
+//   ActionRowBuilder,
+//   ButtonBuilder,
+//   ButtonStyle,
+//   MessageFlags
+//   Collection,
+//   ChatInputCommandInteraction
+//   CollectedInteraction,
+//   User,
+//   escapeMarkdown
+//   ComponentType
+// } from 'discord.js';
 import { container } from 'tsyringe';
 import { OverTimeCommand } from '../interactions/commands/overTime';
 import { createCommand } from '../util/Command';
 import {
+  createEmbed,
   //   createEmbed,
   // invalidClientEmbed,
   notLinkedEmbed
@@ -31,6 +33,7 @@ import { getStatsfmUserFromDiscordUser } from '../util/getStatsfmUserFromDiscord
 import { TimeRangeValue } from '../interactions/utils';
 import { Util } from '../util/Util';
 import { searchArtist } from '../util/search';
+import QuickChart from 'quickchart-js';
 // import { Analytics } from '../util/Analytics';
 
 const statsfmApi = container.resolve(Api);
@@ -260,15 +263,12 @@ export default createCommand(OverTimeCommand)
           dataForRange = data.years;
           break;
       }
-      return Object.entries(dataForRange)
-        .map(([day, stat]) => {
-          return `${day}: ${stat.count} plays - ${Math.round(stat.durationMs / 1000 / 60)} minutes`;
-        })
-        .join('\n');
+      return Object.entries(dataForRange).map(([day, stat]) => {
+        return { key: day, count: stat.count, minutes: Math.round(stat.durationMs / 1000 / 60) };
+      });
     };
 
     const artistName = await statsfmApi.artists.get(artistId);
-
     const data = await statsfmApi.users.artistDateStats(
       statsfmUser.id,
       artistId,
@@ -280,13 +280,48 @@ export default createCommand(OverTimeCommand)
           }
         : undefined
     );
+    console.log(arrangeData(data));
+
+    const arrangedData = arrangeData(data);
     console.log(data);
+    const chart = new QuickChart();
+    chart
+      .setConfig({
+        type: 'line',
+        data: {
+          labels: arrangedData.map((d) => d.key),
+          datasets: [
+            {
+              label: 'Streams',
+              data: arrangedData.map((d) => d.count),
+              fill: false,
+              cubicInterpolationMode: 'monotone',
+              lineTension: 0.4
+            }
+          ]
+        }
+      })
+      .setWidth(800)
+      .setHeight(400)
+      .setBackgroundColor('white');
+
+    const embed = createEmbed()
+      .setTimestamp()
+      .setAuthor({
+        name: `${Util.getDiscordUserTag(targetUser)}'s overtime stats for ${artistName.name}`
+      })
+      // .setDescription(
+      //   `**User:** ${Util.getDiscordUserTag(targetUser)} (${statsfmUser?.id})
+      // **Artist:** ${artistName.name}
+      // **Range:** ${range ?? 'Unknown'}
+      // **data**:
+      // ${arrangeData(data)}`
+      // )
+      .setImage(chart.getUrl() ?? '')
+      .toJSON();
+
     await respond(interaction, {
-      content: `**User:** ${Util.getDiscordUserTag(targetUser)} (${statsfmUser?.id})
-**Artist:** ${artistName.name}
-**Range:** ${range ?? 'Unknown'}
-**data**:
-${arrangeData(data)}`,
+      embeds: [embed]
       // components: [
       //   new ActionRowBuilder<ButtonBuilder>().addComponents(
       //     new ButtonBuilder()
@@ -295,7 +330,7 @@ ${arrangeData(data)}`,
       //       .setStyle(ButtonStyle.Secondary)
       //   )
       // ],
-      flags: MessageFlags.SuppressEmbeds
+      // flags: MessageFlags.SuppressEmbeds
     });
 
     // await analytics.track('NOW_PLAYING_command_run');
