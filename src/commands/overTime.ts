@@ -1,4 +1,4 @@
-import { Api, DateStats } from '@statsfm/statsfm.js';
+import { Api, DateStats, StreamStats } from '@statsfm/statsfm.js';
 // import {
 //   APIEmbedField
 //   ActionRowBuilder,
@@ -249,6 +249,8 @@ export default createCommand(OverTimeCommand)
 
     const arrangeData = (data: DateStats) => {
       let dataForRange;
+      let sortFunction;
+
       switch (range) {
         case '14':
         case '30':
@@ -257,13 +259,32 @@ export default createCommand(OverTimeCommand)
         case '180':
         case '365':
           dataForRange = data.months;
+          // Custom sort function for months - starting from current month (February)
+          sortFunction = (a: [string, StreamStats], b: [string, StreamStats]) => {
+            const currentMonth = new Date().getMonth() + 1;
+            console.log(`Current month: ${currentMonth}`);
+            const aMonth = parseInt(a[0]);
+            const bMonth = parseInt(b[0]);
+
+            // Transform month numbers so that the current month (Feb) is 0, and earlier months have higher values
+            const aTransformed = (aMonth - currentMonth - 1 + 12) % 12;
+            const bTransformed = (bMonth - currentMonth - 1 + 12) % 12;
+
+            return aTransformed - bTransformed;
+          };
           break;
         case 'all':
         default:
           dataForRange = data.years;
           break;
       }
-      return Object.entries(dataForRange).map(([day, stat]) => {
+
+      // Apply custom sorting for months, otherwise use regular Object.entries
+      const entries = sortFunction
+        ? Object.entries(dataForRange).sort(sortFunction)
+        : Object.entries(dataForRange);
+
+      return entries.map(([day, stat]) => {
         return { key: day, count: stat.count, minutes: Math.round(stat.durationMs / 1000 / 60) };
       });
     };
