@@ -34,6 +34,7 @@ import { TimeRangeValue } from '../interactions/utils';
 import { Util } from '../util/Util';
 import { searchArtist } from '../util/search';
 import QuickChart from 'quickchart-js';
+import { GuildMemberRoleManager } from 'discord.js';
 // import { Analytics } from '../util/Analytics';
 
 const statsfmApi = container.resolve(Api);
@@ -169,7 +170,8 @@ export default createCommand(OverTimeCommand)
     await interaction.deferReply();
 
     const targetUser = args.user?.user ?? interaction.user;
-    const range = args.range as TimeRangeValue | undefined;
+    const targetMember = args.user?.member ?? interaction.member;
+    const range = args.range ?? ('180' as TimeRangeValue);
     const artist = args.artist as string;
     const relative = args.relative as boolean;
     const statsfmUser =
@@ -305,7 +307,7 @@ export default createCommand(OverTimeCommand)
       statsfmUser.id,
       artistId,
       'UTC',
-      range && range !== 'all'
+      range !== 'all'
         ? {
             before: Date.now(),
             after: Date.now() - 1000 * 60 * 60 * 24 * Number(range)
@@ -315,7 +317,7 @@ export default createCommand(OverTimeCommand)
 
     const test = await statsfmApi.users.dateStats(
       statsfmUser.id,
-      range && range !== 'all'
+      range !== 'all'
         ? {
             before: Date.now(),
             after: Date.now() - 1000 * 60 * 60 * 24 * Number(range),
@@ -341,6 +343,9 @@ export default createCommand(OverTimeCommand)
       });
       console.log(finalData);
     }
+
+    const roles = targetMember?.roles;
+
     const chart = new QuickChart();
     chart.setVersion('4');
     chart
@@ -350,12 +355,15 @@ export default createCommand(OverTimeCommand)
           labels: arrangedDataArtist.map((d) => d.key),
           datasets: [
             {
-              label: 'Streams',
+              label: `${targetUser} Streams`,
               data: finalData.map((d) => d.count),
               fill: false,
               cubicInterpolationMode: 'monotone',
               tension: 0.4,
-              borderColor: 'rgb(54, 162, 235)'
+              borderColor:
+                roles instanceof GuildMemberRoleManager //todo check how this reacts in dms
+                  ? roles.color?.hexColor
+                  : 'rgb(54, 162, 235)'
             }
           ]
         },
@@ -385,7 +393,18 @@ export default createCommand(OverTimeCommand)
         name: `${Util.getDiscordUserTag(targetUser)}'s overtime stats for ${artistName.name}`
       })
       .setImage(chart.getUrl() ?? '')
+      .setFooter({ text: `Range: ${range}` })
       .toJSON();
+
+    const x = interaction.member?.roles;
+
+    if (x instanceof GuildMemberRoleManager) {
+      console.log(x.color?.color);
+      console.log(x.color?.hexColor);
+    }
+
+    // console.log(interaction.member?.roles);
+    // console.log(targetUser);
 
     await respond(interaction, {
       embeds: [embed]
