@@ -34,6 +34,11 @@ export const OverTimeCommand = {
       required: true,
       description: 'The artist you want to see your stats for over time vor'
     } as const satisfies StringAutocompleteOption<false>,
+    relative: {
+      type: ApplicationCommandOptionType.Boolean,
+      description:
+        'Show as a percent of total listens over the time period instead of an absolute number of streams'
+    },
     range: createRangeOptionForTop('artists'),
     user: createUserOptionForTop('artists')
   },

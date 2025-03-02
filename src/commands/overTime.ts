@@ -171,6 +171,7 @@ export default createCommand(OverTimeCommand)
     const targetUser = args.user?.user ?? interaction.user;
     const range = args.range as TimeRangeValue | undefined;
     const artist = args.artist as string;
+    const relative = args.relative as boolean;
     const statsfmUser =
       targetUser === interaction.user
         ? statsfmUserSelf
@@ -259,14 +260,24 @@ export default createCommand(OverTimeCommand)
         case '180':
         case '365':
           dataForRange = data.months;
-          // Custom sort function for months - starting from current month (February)
+
+          // Add missing months with zero values
+          const allMonths = { ...dataForRange };
+          for (let i = 1; i <= 12; i++) {
+            if (!allMonths[i]) {
+              allMonths[i] = { count: 0, durationMs: 0 };
+            }
+          }
+
+          dataForRange = allMonths;
+          // Custom sort function for months - starting from current monthxs
           sortFunction = (a: [string, StreamStats], b: [string, StreamStats]) => {
             const currentMonth = new Date().getMonth() + 1;
             console.log(`Current month: ${currentMonth}`);
             const aMonth = parseInt(a[0]);
             const bMonth = parseInt(b[0]);
 
-            // Transform month numbers so that the current month (Feb) is 0, and earlier months have higher values
+            // Transform month numbers so that the current month is 0, and earlier months have higher values
             const aTransformed = (aMonth - currentMonth - 1 + 12) % 12;
             const bTransformed = (bMonth - currentMonth - 1 + 12) % 12;
 
@@ -294,32 +305,74 @@ export default createCommand(OverTimeCommand)
       statsfmUser.id,
       artistId,
       'UTC',
-      range !== 'all'
+      range && range !== 'all'
         ? {
             before: Date.now(),
             after: Date.now() - 1000 * 60 * 60 * 24 * Number(range)
           }
         : undefined
     );
-    console.log(arrangeData(data));
 
-    const arrangedData = arrangeData(data);
-    console.log(data);
+    const test = await statsfmApi.users.dateStats(
+      statsfmUser.id,
+      range && range !== 'all'
+        ? {
+            before: Date.now(),
+            after: Date.now() - 1000 * 60 * 60 * 24 * Number(range),
+            timeZone: 'UTC'
+          }
+        : { timeZone: 'UTC' }
+    );
+
+    const arrangedDataArtist = arrangeData(data);
+    const arrangedDataTotal = arrangeData(test);
+    console.log('artist', arrangedDataArtist);
+    console.log('total', arrangedDataTotal);
+    let finalData = arrangedDataArtist;
+    console.log(finalData);
+    if (relative) {
+      finalData = finalData.map(({ key, count, minutes }, idx) => {
+        console.log(`${key} - artist: ${count} total: ${arrangedDataTotal[idx].count}`);
+        return {
+          key,
+          count: Math.round((count / arrangedDataTotal[idx].count) * 100) ?? 0,
+          minutes
+        };
+      });
+      console.log(finalData);
+    }
     const chart = new QuickChart();
+    chart.setVersion('4');
     chart
       .setConfig({
         type: 'line',
         data: {
-          labels: arrangedData.map((d) => d.key),
+          labels: arrangedDataArtist.map((d) => d.key),
           datasets: [
             {
               label: 'Streams',
-              data: arrangedData.map((d) => d.count),
+              data: finalData.map((d) => d.count),
               fill: false,
               cubicInterpolationMode: 'monotone',
-              lineTension: 0.4
+              tension: 0.4,
+              borderColor: 'rgb(54, 162, 235)'
             }
           ]
+        },
+        options: {
+          scales: relative
+            ? {
+                y: {
+                  min: 0,
+                  max: 100,
+                  ticks: {
+                    callback: function (value: string) {
+                      return value + '%';
+                    }
+                  }
+                }
+              }
+            : undefined
         }
       })
       .setWidth(800)
@@ -331,13 +384,6 @@ export default createCommand(OverTimeCommand)
       .setAuthor({
         name: `${Util.getDiscordUserTag(targetUser)}'s overtime stats for ${artistName.name}`
       })
-      // .setDescription(
-      //   `**User:** ${Util.getDiscordUserTag(targetUser)} (${statsfmUser?.id})
-      // **Artist:** ${artistName.name}
-      // **Range:** ${range ?? 'Unknown'}
-      // **data**:
-      // ${arrangeData(data)}`
-      // )
       .setImage(chart.getUrl() ?? '')
       .toJSON();
 
